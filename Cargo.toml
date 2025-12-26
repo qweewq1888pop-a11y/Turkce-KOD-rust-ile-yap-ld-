@@ -1,0 +1,46 @@
+[package]
+name = "turkcekod"
+version = "0.0.1-first-tests"
+edition = "2021"
+authors = ["Efe Aydın"]
+description = "Türkçe Kod - Turkish Programming Language with GPU-accelerated IDE"
+license = "GPL-3.0"
+
+[dependencies]
+# GUI Framework with WebGPU backend
+eframe = { version = "0.29", features = ["wgpu"] }
+egui_extras = { version = "0.29", features = ["syntect"] }
+
+# Error handling
+thiserror = "2.0"
+
+# Regex for tokenizing
+regex = "1.11"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# File dialogs
+rfd = "0.15"
+
+# GPU Compute - use same wgpu version as eframe (0.22)
+wgpu = "22"
+pollster = "0.3"
+bytemuck = { version = "1.14", features = ["derive"] }
+futures = "0.3"
+
+# JSON support for dataset loading
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Tensor operations
+ndarray = "0.16"
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
+# Disable LTO due to wgpu linking issues
+lto = false
+codegen-units = 1
+

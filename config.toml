@@ -1,0 +1,5 @@
+# Cargo configuration for TurkceKOD
+# Target directory is set outside OneDrive to avoid file locking issues during builds
+
+[build]
+target-dir = "C:/Temp/turkcekod-target"
