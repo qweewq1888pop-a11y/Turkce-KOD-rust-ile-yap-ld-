@@ -1037,9 +1037,28 @@ impl Interpreter {
                 Ok(None)
             }
 
-            Statement::GuiData { var_name } => {
-                if let Some(text) = &self.gui_input_text {
-                    // Handle String input
+            Statement::GuiData { widget_id, var_name } => {
+                // If widget_id is specified, read from that specific widget's "deger" property
+                if let Some(id) = widget_id {
+                    // Find the widget and get its value
+                    if let Some(widget) = self.gui_widgets.iter().find(|w| &w.id == id) {
+                        if let Some(value) = widget.properties.get("deger") {
+                            self.variables.insert(var_name.clone(), value.clone());
+                            let line = format!("Widget'tan veri alındı ({}): '{}'", id, value);
+                            self.output.push(line.clone());
+                            println!("{}", line);
+                        } else {
+                            // Widget found but no "deger" property - return empty string
+                            self.variables.insert(var_name.clone(), Value::String(String::new()));
+                            let line = format!("Widget'ta değer bulunamadı: {}", id);
+                            self.output.push(line.clone());
+                            println!("{}", line);
+                        }
+                    } else {
+                        return Err(TurkceKodError::TanimlanmayanDegisken { name: id.clone() });
+                    }
+                } else if let Some(text) = &self.gui_input_text {
+                    // Handle String input (original behavior for chat widget)
                     self.variables.insert(var_name.clone(), Value::String(text.clone()));
                     let line = format!("GUI'den metin alındı: '{}'", text);
                     self.output.push(line.clone());
