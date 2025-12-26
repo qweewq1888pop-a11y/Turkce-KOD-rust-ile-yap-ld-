@@ -295,8 +295,9 @@ pub enum Statement {
         var_name: String,
     },
     
-    /// Get GUI input data: gui_veri var
+    /// Get GUI input data: gui_veri [widget_id] var
     GuiData {
+        widget_id: Option<String>,
         var_name: String,
     },
 }
@@ -1496,13 +1497,23 @@ impl Parser {
         Ok(Statement::ConsoleRead { var_name })
     }
     
-    /// Parse GUI data: gui_veri var
+    /// Parse GUI data: gui_veri [widget_id] var
+    /// New syntax: gui_veri sayi_girdi x (reads from widget "sayi_girdi" into var "x")
+    /// Old syntax: gui_veri x (reads from global gui_input_text)
     fn parse_gui_data(&mut self) -> TurkceKodResult<Statement> {
         self.advance(); // consume gui_veri
         
-        let var_name = self.expect_identifier("Değişken adı bekleniyor")?;
+        let first_id = self.expect_identifier("Değişken adı bekleniyor")?;
         
-        Ok(Statement::GuiData { var_name })
+        // Check if there's a second identifier (new syntax with widget_id)
+        if let Token::Identifier(second_id) = &self.current().token {
+            let var_name = second_id.clone();
+            self.advance();
+            Ok(Statement::GuiData { widget_id: Some(first_id), var_name })
+        } else {
+            // Old syntax: just variable name
+            Ok(Statement::GuiData { widget_id: None, var_name: first_id })
+        }
     }
     
     /// Parse standalone random tensor: rastgele name [shape]
