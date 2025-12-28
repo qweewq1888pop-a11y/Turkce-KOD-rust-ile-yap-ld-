@@ -1,6 +1,6 @@
 # Türkçe Kod
 
-**GPU-Accelerated Turkish Programming Language with Built-in AI/ML Capabilities**
+**GPU-Accelerated Turkish Programming Language with Built-in AI/ML Capabilities and GUI**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
@@ -62,3 +62,4 @@ This project is licensed under the **GNU General Public License v3.0** - see the
 ## Author
 
 Efe Aydın
+
