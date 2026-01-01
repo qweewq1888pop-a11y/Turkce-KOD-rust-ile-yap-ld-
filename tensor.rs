@@ -227,6 +227,20 @@ impl Tensor {
         self.inner.borrow().data.clone()
     }
     
+    /// Update data in-place without creating a new tensor
+    /// This is more efficient for optimizer steps where shape doesn't change
+    pub fn update_data_in_place(&mut self, new_data: &[f32]) -> TensorResult<()> {
+        let mut inner = self.inner.borrow_mut();
+        if inner.data.len() != new_data.len() {
+            return Err(TensorError::ShapeMismatch {
+                expected: inner.data.len(),
+                got: new_data.len(),
+            });
+        }
+        inner.data.copy_from_slice(new_data);
+        Ok(())
+    }
+    
     /// Check if tensor is a scalar (0-dim)
     pub fn is_scalar(&self) -> bool { self.shape().is_empty() }
     
@@ -1080,7 +1094,7 @@ impl Tensor {
         Ok(Self { inner: Rc::new(RefCell::new(new_inner)) })
     }
 
-    /// RMS normalization (LLaMA style)
+    /// RMS normalization (style)
     pub fn rms_norm(&self, weight: &Tensor, eps: f32) -> TensorResult<Self> {
         if self.ndim() != 2 {
             return Err(TensorError::DimensionError(

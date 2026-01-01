@@ -6,6 +6,11 @@ authors = ["Efe Aydın"]
 description = "Türkçe Kod - Turkish Programming Language with GPU-accelerated IDE"
 license = "GPL-3.0"
 
+# Binary target (main.rs is in root folder, not src/)
+[[bin]]
+name = "turkcekod"
+path = "main.rs"
+
 [dependencies]
 # GUI Framework with WebGPU backend
 eframe = { version = "0.29", features = ["wgpu"] }
@@ -37,6 +42,9 @@ serde_json = "1.0"
 # Tensor operations
 ndarray = "0.16"
 rand = "0.8"
+
+# CLI argument parsing
+clap = { version = "4.4", features = ["derive"] }
 
 [profile.release]
 opt-level = 3

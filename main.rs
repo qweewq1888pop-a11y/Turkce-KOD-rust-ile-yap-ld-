@@ -1,6 +1,11 @@
 //! Türkçe Kod - GPU-Accelerated IDE
 //! 
 //! A modern IDE for the Turkish programming language using egui and WebGPU.
+//! 
+//! TharvexalOS Kiosk Mode:
+//!   turkcekod --fullscreen --kiosk --gpu-mode
+//! 
+//! This boots the IDE in full-screen kiosk mode for embedded/Live USB deployments.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -11,13 +16,47 @@ mod parser;
 mod value;
 mod tensor;
 mod backend;
+mod explorer;
+mod keyboard;
+mod system_panel;
 
+use clap::Parser;
 use eframe::egui;
 use std::path::PathBuf;
 
+/// TürkçeKod - GPU-Accelerated Turkish Programming IDE
+/// 
+/// TharvexalOS için tam ekran kiosk modunda çalıştırılabilir.
+#[derive(Parser, Debug)]
+#[command(name = "turkcekod")]
+#[command(version = "0.0.1-first-tests")]
+#[command(author = "Efe Aydın")]
+#[command(about = "Türkçe Programlama Dili - GPU Hızlandırmalı IDE")]
+struct CliArgs {
+    /// Tam ekran modunda başlat (TharvexalOS için)
+    #[arg(short = 'f', long)]
+    fullscreen: bool,
+    
+    /// Kiosk modunda başlat (dekorasyon yok, çıkış zor)
+    #[arg(short = 'k', long)]
+    kiosk: bool,
+    
+    /// GPU hesaplamayı zorla (varsayılan: otomatik)
+    #[arg(long)]
+    gpu_mode: bool,
+    
+    /// Başlangıçta açılacak dosya
+    #[arg(short = 'o', long)]
+    open: Option<PathBuf>,
+    
+    /// Başlangıçta kodu otomatik çalıştır
+    #[arg(long)]
+    autorun: bool,
+}
+
 use crate::interpreter::Interpreter;
 use crate::lexer::Lexer;
-use crate::parser::{Parser, GuiWidgetType, Statement};
+use crate::parser::{Parser as TurkceParser, GuiWidgetType, Statement};
 use crate::value::Value;
 
 /// Main application state
@@ -38,6 +77,14 @@ struct TurkceKodApp {
     error_message: Option<String>,
     /// Font size
     font_size: f32,
+    /// Built-in file explorer (TharvexalOS için)
+    explorer: explorer::TharvexalExplorer,
+    /// Kiosk modu (rfd yerine explorer kullan)
+    kiosk_mode: bool,
+    /// Sanal klavye (TharvexalOS için)
+    keyboard: keyboard::VirtualKeyboard,
+    /// Sistem ayarları paneli (TharvexalOS için)
+    system_panel: system_panel::SystemPanel,
 }
 
 impl Default for TurkceKodApp {
@@ -72,6 +119,10 @@ tekrar 3 {
             show_about: false,
             error_message: None,
             font_size: 16.0,
+            explorer: explorer::TharvexalExplorer::new(),
+            kiosk_mode: false,
+            keyboard: keyboard::VirtualKeyboard::new(),
+            system_panel: system_panel::SystemPanel::new(),
         }
     }
 }
@@ -103,7 +154,7 @@ impl TurkceKodApp {
         };
 
         // Parse
-        let mut parser = Parser::new(tokens);
+        let mut parser = TurkceParser::new(tokens);
         let ast = match parser.parse() {
             Ok(a) => a,
             Err(e) => {
@@ -132,19 +183,30 @@ impl TurkceKodApp {
 
     /// Open a file
     fn open_file(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Türkçe Kod Dosyaları", &["turkcekod", "tk"])
-            .pick_file()
-        {
-            match std::fs::read_to_string(&path) {
-                Ok(content) => {
-                    self.code = content;
-                    self.file_path = Some(path);
-                    self.output.clear();
-                }
-                Err(e) => {
-                    self.error_message = Some(format!("Dosya açılamadı: {}", e));
-                }
+        if self.kiosk_mode {
+            // TharvexalOS: Built-in explorer kullan
+            self.explorer.show_open();
+        } else {
+            // Normal mod: rfd kullan
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Türkçe Kod Dosyaları", &["turkcekod", "tk"])
+                .pick_file()
+            {
+                self.load_file_content(&path);
+            }
+        }
+    }
+    
+    /// Load file content from path
+    fn load_file_content(&mut self, path: &std::path::Path) {
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                self.code = content;
+                self.file_path = Some(path.to_path_buf());
+                self.output.clear();
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Dosya açılamadı: {}", e));
             }
         }
     }
@@ -167,19 +229,35 @@ impl TurkceKodApp {
 
     /// Save as a new file
     fn save_file_as(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Türkçe Kod Dosyaları", &["turkcekod"])
-            .set_file_name("yeni.turkcekod")
-            .save_file()
-        {
-            match std::fs::write(&path, &self.code) {
-                Ok(_) => {
-                    self.file_path = Some(path.clone());
-                    self.output = format!("Dosya kaydedildi: {}", path.display());
-                }
-                Err(e) => {
-                    self.error_message = Some(format!("Dosya kaydedilemedi: {}", e));
-                }
+        if self.kiosk_mode {
+            // TharvexalOS: Built-in explorer kullan
+            let filename = self.file_path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "yeni.turkcekod".to_string());
+            self.explorer.show_save(&filename);
+        } else {
+            // Normal mod: rfd kullan
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Türkçe Kod Dosyaları", &["turkcekod"])
+                .set_file_name("yeni.turkcekod")
+                .save_file()
+            {
+                self.save_to_path(&path);
+            }
+        }
+    }
+    
+    /// Save content to specific path
+    fn save_to_path(&mut self, path: &std::path::Path) {
+        match std::fs::write(path, &self.code) {
+            Ok(_) => {
+                self.file_path = Some(path.to_path_buf());
+                self.output = format!("Dosya kaydedildi: {}", path.display());
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Dosya kaydedilemedi: {}", e));
             }
         }
     }
@@ -436,14 +514,36 @@ impl eframe::App for TurkceKodApp {
 
                 ui.separator();
 
-                ui.label("Efe Aydın Türkçe Kod | GPU-Accelerated IDE | Rust + WebGPU");
+                ui.label("Efe Aydın Türkçe Kod | TharvexalOS");
 
                 // Error indicator
                 if self.error_message.is_some() {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.colored_label(egui::Color32::RED, "⚠️ Hata!");
-                    });
+                    ui.colored_label(egui::Color32::RED, "⚠️");
                 }
+                
+                // Right side: System buttons (kiosk mode or always show)
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Sistem Ayarları butonu
+                    system_panel::system_button(ui, &mut self.system_panel);
+                    
+                    // Sanal Klavye butonu (sadece kiosk modunda göster)
+                    if self.kiosk_mode {
+                        keyboard::keyboard_toggle_button(ui, &mut self.keyboard);
+                    }
+                    
+                    // Hardware monitor küçük gösterge
+                    if let Some(temp) = self.system_panel.gpu_temp {
+                        let color = if temp > 80.0 { egui::Color32::RED } 
+                            else if temp > 60.0 { egui::Color32::YELLOW } 
+                            else { egui::Color32::GREEN };
+                        ui.colored_label(color, format!("🌡️{:.0}°", temp));
+                    }
+                    
+                    let ram_percent = if self.system_panel.ram_total > 0 {
+                        (self.system_panel.ram_used * 100 / self.system_panel.ram_total) as u8
+                    } else { 0 };
+                    ui.label(format!("💾{}%", ram_percent));
+                });
             });
         });
 
@@ -581,6 +681,36 @@ impl eframe::App for TurkceKodApp {
                     });
                 });
         }
+        
+        // Tharvexal Explorer (built-in file browser)
+        self.explorer.show(ctx);
+        
+        // Handle pending file from explorer
+        if let Some(path) = self.explorer.take_pending_file() {
+            if self.explorer.save_mode {
+                // Saving a file
+                self.save_to_path(&path);
+            } else {
+                // Opening a file
+                self.load_file_content(&path);
+            }
+        }
+        
+        // System Panel (settings, hardware monitor)
+        self.system_panel.show(ctx);
+        
+        // Virtual Keyboard (kiosk mode)
+        self.keyboard.show(ctx);
+        
+        // Handle keyboard input
+        let output = self.keyboard.take_output();
+        if !output.is_empty() {
+            // Append to code editor (simple implementation)
+            self.code.push_str(&output);
+        }
+        if self.keyboard.take_backspace() {
+            self.code.pop();
+        }
 
         // Handle keyboard shortcuts
         ctx.input(|i| {
@@ -602,19 +732,71 @@ impl eframe::App for TurkceKodApp {
 
 fn main() -> eframe::Result<()> {
     env_logger::init();
+    
+    // Parse CLI arguments
+    let args = CliArgs::parse();
+    
+    // Configure viewport based on CLI args
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("Türkçe Kod IDE - TharvexalOS");
+    
+    if args.fullscreen {
+        // TharvexalOS fullscreen mode
+        viewport = viewport
+            .with_fullscreen(true)
+            .with_maximized(true);
+    } else {
+        viewport = viewport
+            .with_inner_size([1024.0, 768.0])
+            .with_min_inner_size([800.0, 600.0]);
+    }
+    
+    if args.kiosk {
+        // Kiosk mode: no decorations, no close button
+        viewport = viewport
+            .with_decorations(false)
+            .with_resizable(false);
+    }
+    
+    // Set GPU mode if requested
+    if args.gpu_mode {
+        backend::set_execution_mode(backend::ExecutionMode::Gpu);
+    }
 
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1024.0, 768.0])
-            .with_min_inner_size([800.0, 600.0])
-            .with_title("Türkçe Kod IDE"),
+        viewport,
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
+    
+    // Clone args for closure
+    let open_file = args.open.clone();
+    let autorun = args.autorun;
+    let kiosk_mode = args.kiosk;
 
     eframe::run_native(
         "Türkçe Kod IDE",
         native_options,
-        Box::new(|cc| Ok(Box::new(TurkceKodApp::new(cc)))),
+        Box::new(move |cc| {
+            let mut app = TurkceKodApp::new(cc);
+            
+            // Set kiosk mode (uses built-in explorer instead of rfd)
+            app.kiosk_mode = kiosk_mode;
+            
+            // Open file if specified
+            if let Some(path) = &open_file {
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    app.code = content;
+                    app.file_path = Some(path.clone());
+                }
+            }
+            
+            // Auto-run if specified
+            if autorun {
+                app.run_code();
+            }
+            
+            Ok(Box::new(app))
+        }),
     )
 }

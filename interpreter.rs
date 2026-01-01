@@ -780,11 +780,12 @@ impl Interpreter {
             }
             
             Statement::OptimizerStep { optimizer } => {
-                // Increment timestep first (needed for bias correction)
+                // Get optimizer and increment timestep
                 let opt = self.optimizers.get_mut(optimizer).ok_or_else(|| 
                     TurkceKodError::TanimlanmayanDegisken { name: optimizer.clone() })?;
                 opt.t += 1;
                 
+                // Cache optimizer values to avoid repeated borrows
                 let lr = opt.learning_rate as f32;
                 let beta1 = opt.beta1 as f32;
                 let beta2 = opt.beta2 as f32;
@@ -792,58 +793,74 @@ impl Interpreter {
                 let t = opt.t;
                 let opt_type = opt.opt_type.clone();
                 
-                // Collect gradient names to avoid borrow issues
+                // PERFORMANCE FIX: Collect gradient names once, avoid repeated HashMap lookups
                 let grad_names: Vec<String> = self.gradients.keys().cloned().collect();
                 
                 for name in grad_names {
-                    if let (Some(grad), Some(tensor)) = (self.gradients.get(&name), self.tensors.get(&name)) {
-                        let grad_data = grad.into_data();
-                        let tensor_data = tensor.into_data();
-                        let tensor_shape = tensor.shape().clone();
-                        
-                        let updated_data = match opt_type {
-                            OptimizerType::SGD => {
-                                // SGD: w = w - lr * grad
-                                tensor_data.iter()
-                                    .zip(grad_data.iter())
-                                    .map(|(&w, &g)| w - lr * g)
-                                    .collect::<Vec<f32>>()
-                            }
-                            OptimizerType::Adam => {
-                                // Full Adam with momentum and bias correction
-                                // Get or initialize m and v for this parameter
-                                let opt = self.optimizers.get_mut(optimizer).unwrap();
-                                
-                                let m = opt.m.entry(name.clone())
-                                    .or_insert_with(|| vec![0.0; grad_data.len()]);
-                                let v = opt.v.entry(name.clone())
-                                    .or_insert_with(|| vec![0.0; grad_data.len()]);
-                                
-                                // Update biased first moment estimate: m = β1 * m + (1 - β1) * g
-                                // Update biased second moment estimate: v = β2 * v + (1 - β2) * g²
-                                for i in 0..grad_data.len() {
-                                    m[i] = beta1 * m[i] + (1.0 - beta1) * grad_data[i];
-                                    v[i] = beta2 * v[i] + (1.0 - beta2) * grad_data[i] * grad_data[i];
-                                }
-                                
-                                // Bias correction
-                                let bias_correction1 = 1.0 - beta1.powi(t as i32);
-                                let bias_correction2 = 1.0 - beta2.powi(t as i32);
-                                
-                                // Update weights: w = w - lr * (m_hat / (sqrt(v_hat) + ε))
-                                tensor_data.iter()
-                                    .zip(m.iter().zip(v.iter()))
-                                    .map(|(&w, (&m_i, &v_i))| {
-                                        let m_hat = m_i / bias_correction1;
-                                        let v_hat = v_i / bias_correction2;
-                                        w - lr * m_hat / (v_hat.sqrt() + epsilon)
-                                    })
-                                    .collect::<Vec<f32>>()
-                            }
+                    // PERFORMANCE FIX: Use data() instead of into_data() to avoid cloning
+                    let (grad_data, tensor_data, tensor_shape) = {
+                        let grad = match self.gradients.get(&name) {
+                            Some(g) => g,
+                            None => continue,
                         };
-                        
-                        // Update the tensor
-                        if let Some(tensor) = self.tensors.get_mut(&name) {
+                        let tensor = match self.tensors.get(&name) {
+                            Some(t) => t,
+                            None => continue,
+                        };
+                        // Clone only what we need for computation
+                        (grad.data().to_vec(), tensor.data().to_vec(), tensor.shape().clone())
+                    };
+                    
+                    let updated_data: Vec<f32> = match opt_type {
+                        OptimizerType::SGD => {
+                            // SGD: w = w - lr * grad (vectorized)
+                            tensor_data.iter()
+                                .zip(grad_data.iter())
+                                .map(|(&w, &g)| w - lr * g)
+                                .collect()
+                        }
+                        OptimizerType::Adam => {
+                            // PERFORMANCE FIX: Get m/v outside of inner loop
+                            let opt = self.optimizers.get_mut(optimizer).unwrap();
+                            
+                            // Initialize or get momentum vectors
+                            let m = opt.m.entry(name.clone())
+                                .or_insert_with(|| vec![0.0f32; grad_data.len()]);
+                            let v = opt.v.entry(name.clone())
+                                .or_insert_with(|| vec![0.0f32; grad_data.len()]);
+                            
+                            // Bias correction factors (computed once)
+                            let bias_correction1 = 1.0 - beta1.powi(t as i32);
+                            let bias_correction2 = 1.0 - beta2.powi(t as i32);
+                            
+                            // PERFORMANCE FIX: Single pass update of m, v, and weights
+                            tensor_data.iter()
+                                .zip(grad_data.iter())
+                                .enumerate()
+                                .map(|(i, (&w, &g))| {
+                                    // Update m and v in place
+                                    m[i] = beta1 * m[i] + (1.0 - beta1) * g;
+                                    v[i] = beta2 * v[i] + (1.0 - beta2) * g * g;
+                                    
+                                    // Bias-corrected estimates
+                                    let m_hat = m[i] / bias_correction1;
+                                    let v_hat = v[i] / bias_correction2;
+                                    
+                                    // Weight update
+                                    w - lr * m_hat / (v_hat.sqrt() + epsilon)
+                                })
+                                .collect()
+                        }
+                    };
+                    
+                    // PERFORMANCE FIX: Update tensor in-place if possible
+                    if let Some(tensor) = self.tensors.get_mut(&name) {
+                        // Try in-place update first, fall back to new tensor if shapes don't match
+                        if tensor.data().len() == updated_data.len() {
+                            if let Err(_) = tensor.update_data_in_place(&updated_data) {
+                                *tensor = Tensor::new(updated_data, tensor_shape).unwrap();
+                            }
+                        } else {
                             *tensor = Tensor::new(updated_data, tensor_shape).unwrap();
                         }
                     }
